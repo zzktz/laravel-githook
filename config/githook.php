@@ -37,7 +37,9 @@ return [
         'require_clean_worktree' => true,
         'lock_path' => storage_path('framework/cache/laravel-githook'),
         'timeout' => 120,
-        'commands' => [],
+        'commands' => [
+            ['composer', 'install', '--no-interaction', '--prefer-dist'],
+        ],
         'health_check' => [
             'url' => null,
             'timeout' => 5,

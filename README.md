@@ -64,7 +64,7 @@ Gitee Webhook 使用 `X-Gitee-Token` 和 `X-Gitee-Event` 校验。GitHub Webhook
 
 首版在 webhook HTTP 请求中同步部署。若更新步骤可能超过 webhook 提供方的请求等待时限，应缩短命令耗时或在后续集成队列异步处理；超时后的 webhook 重试可能再次触发部署，因此部署命令应保持幂等。
 
-可在 `deployment.commands` 配置部署更新后的命令。命令必须写成参数数组，不能来自 webhook payload，例如：
+代码更新后默认执行 `composer install --no-interaction --prefer-dist`，根据仓库中的 `composer.lock` 同步 A 项目的依赖，因此通常无需登录服务器手动安装依赖。开发时修改依赖后，应在开发环境更新并提交 `composer.lock`，否则部署无法保证安装到预期版本。还需确保运行 Laravel 的用户能执行 Composer、写入 `vendor` 目录。若不需要默认安装或要调整命令，可在 `deployment.commands` 中覆盖配置。命令必须写成参数数组，不能来自 webhook payload，例如：
 
 ```php
 'deployment' => [
