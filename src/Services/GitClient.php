@@ -3,6 +3,8 @@
 namespace Zzktz\LaravelGithook\Services;
 
 use RuntimeException;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
 
 class GitClient
@@ -57,7 +59,7 @@ class GitClient
         ];
     }
 
-    public function runCommand(array $command, $workingDirectory, $timeout)
+    public function runCommand(array $command, $workingDirectory, $timeout, array $context = [])
     {
         if (empty($command) || !is_string($command[0])) {
             throw new RuntimeException('invalid_deployment_command');
@@ -69,7 +71,74 @@ class GitClient
             }
         }
 
-        $this->run(array_values($command), $workingDirectory, $timeout);
+        $name = basename(str_replace('\\', '/', $command[0]));
+        $startedAt = microtime(true);
+        $process = null;
+
+        try {
+            $process = new Process(array_values($command), $workingDirectory, null, null, (float) $timeout);
+            $process->run();
+        } catch (\Throwable $exception) {
+            $timedOut = $exception instanceof ProcessTimedOutException;
+            if ($timedOut) {
+                $process = $exception->getProcess();
+            }
+
+            $this->logDeploymentCommand('error', 'Deployment command failed', array_merge($context, [
+                'command' => $name,
+                'code' => $timedOut ? 'command_timeout' : 'command_process_failed',
+                'timed_out' => $timedOut,
+                'exit_code' => $process ? $process->getExitCode() : null,
+                'duration_seconds' => round(microtime(true) - $startedAt, 3),
+                'output' => $process
+                    ? $this->sanitizeLogOutput($process->getErrorOutput() . $process->getOutput())
+                    : '',
+            ]));
+
+            throw new RuntimeException($timedOut ? 'command_timeout' : 'command_process_failed');
+        }
+
+        $duration = round(microtime(true) - $startedAt, 3);
+        if (!$process->isSuccessful()) {
+            $this->logDeploymentCommand('error', 'Deployment command failed', array_merge($context, [
+                'command' => $name,
+                'code' => 'deployment_command_failed',
+                'exit_code' => $process->getExitCode(),
+                'timed_out' => false,
+                'duration_seconds' => $duration,
+                'output' => $this->sanitizeLogOutput($process->getErrorOutput() . $process->getOutput()),
+            ]));
+
+            throw new RuntimeException('deployment_command_failed');
+        }
+
+        $this->logDeploymentCommand('info', 'Deployment command succeeded', array_merge($context, [
+            'command' => $name,
+            'duration_seconds' => $duration,
+        ]));
+
+        return $process->getOutput();
+    }
+
+    private function logDeploymentCommand($level, $message, array $context)
+    {
+        $channel = function_exists('config') ? config('githook.logging.channel', 'stack') : 'stack';
+        Log::channel($channel)->{$level}($message, $context);
+    }
+
+    private function sanitizeLogOutput($output)
+    {
+        $output = preg_replace('~(https?://)[^/\\s@]+@~i', '$1[redacted]@', (string) $output);
+        $output = preg_replace('~\\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,})\\b~', '[redacted-token]', $output);
+        $output = preg_replace('~([?&](?:access_token|token|password|secret|key)=)[^&\\s]+~i', '$1[redacted]', $output);
+        $output = preg_replace('~\\b(access_token|token|password|secret|api_key)\\s*([:=])\\s*[^\\s,;]+~i', '$1$2[redacted]', $output);
+        $output = preg_replace('~(authorization\\s*:\\s*)\\S+(?:\\s+\\S+)?~i', '$1[redacted]', $output);
+
+        if (strlen($output) > 12000) {
+            $output = substr($output, 0, 12000) . ' [output truncated]';
+        }
+
+        return trim($output);
     }
 
     private function validateWorkingDirectory($path)
@@ -100,6 +169,8 @@ class GitClient
         try {
             $process = new Process($command, $workingDirectory, null, null, (float) $timeout);
             $process->run();
+        } catch (ProcessTimedOutException $exception) {
+            throw new RuntimeException('command_timeout');
         } catch (\Throwable $exception) {
             # 不把进程启动异常中的命令、目录或远程地址返回给调用方。
             throw new RuntimeException('git_command_failed');

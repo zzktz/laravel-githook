@@ -60,7 +60,7 @@ Gitee Webhook 使用 `X-Gitee-Token` 和 `X-Gitee-Event` 校验。GitHub Webhook
 
 ## 部署行为
 
-部署前会检查服务开关、JSON、事件类型、来源 IP（若启用）、仓库身份、共享密钥、分支白名单、工作目录、Git worktree、remote 和工作树状态。相同目录的并发请求通过文件锁串行保护；Git 操作默认超时 120 秒。
+部署前会检查服务开关、JSON、事件类型、来源 IP（若启用）、仓库身份、共享密钥、分支白名单、工作目录、Git worktree、remote 和工作树状态。相同目录的并发请求通过文件锁串行保护；Git 操作和每条部署命令默认超时 120 秒，可通过 `deployment.timeout` 调整。命令达到超时后会被终止并作为部署失败返回，避免网络等待无限期挂起。
 
 首版在 webhook HTTP 请求中同步部署。若更新步骤可能超过 webhook 提供方的请求等待时限，应缩短命令耗时或在后续集成队列异步处理；超时后的 webhook 重试可能再次触发部署，因此部署命令应保持幂等。
 
@@ -81,7 +81,7 @@ Gitee Webhook 使用 `X-Gitee-Token` 和 `X-Gitee-Event` 校验。GitHub Webhook
 
 健康检查 URL 和部署命令只应由项目管理员配置。数据库迁移默认不执行；确认项目迁移流程可安全自动化后，才应将其作为受控的部署命令配置。
 
-响应只返回状态、稳定错误码、request ID 和必要的 commit 信息；Git 命令输出和认证信息不会返回给调用方。详细运行日志写入 Laravel 配置的日志 channel。
+部署命令成功或失败都会写入 Laravel 配置的日志 channel（默认 `stack`，通常记录在 `storage/logs/laravel.log`）。失败日志包含退出码、超时状态和截断后的命令错误输出；日志会对常见 URL 凭据和令牌格式进行脱敏。Webhook 响应只返回状态、稳定错误码、request ID 和必要的 commit 信息，不会返回命令输出。
 
 ## 本地开发
 

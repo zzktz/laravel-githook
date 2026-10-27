@@ -44,7 +44,10 @@ class DeploymentService
             );
 
             foreach (isset($deployment['commands']) ? $deployment['commands'] : [] as $command) {
-                $this->git->runCommand($command, $result['path'], $timeout);
+                $this->git->runCommand($command, $result['path'], $timeout, [
+                    'repository' => $alias,
+                    'branch' => $branch,
+                ]);
             }
 
             $this->checkHealth($deployment, $timeout);
