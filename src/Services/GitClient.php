@@ -11,6 +11,10 @@ class GitClient
     {
         $workingDirectory = $this->validateWorkingDirectory($path);
         $this->run(['git', 'rev-parse', '--is-inside-work-tree'], $workingDirectory, $timeout);
+        $repositoryRoot = trim($this->run(['git', 'rev-parse', '--show-toplevel'], $workingDirectory, $timeout));
+        if (realpath($repositoryRoot) !== $workingDirectory) {
+            throw new RuntimeException('deployment_path_not_repository_root');
+        }
 
         $configuredRemote = trim($this->run(['git', 'remote', 'get-url', 'origin'], $workingDirectory, $timeout));
         if (!$this->sameRemote($configuredRemote, $remote)) {
@@ -93,8 +97,13 @@ class GitClient
 
     private function run(array $command, $workingDirectory, $timeout, $allowFailure = false)
     {
-        $process = new Process($command, $workingDirectory, null, null, (float) $timeout);
-        $process->run();
+        try {
+            $process = new Process($command, $workingDirectory, null, null, (float) $timeout);
+            $process->run();
+        } catch (\Throwable $exception) {
+            # 不把进程启动异常中的命令、目录或远程地址返回给调用方。
+            throw new RuntimeException('git_command_failed');
+        }
 
         if (!$process->isSuccessful()) {
             if ($allowFailure) {

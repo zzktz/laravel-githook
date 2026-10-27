@@ -18,6 +18,9 @@ class DeploymentService
     {
         $deployment = config('githook.deployment', []);
         $timeout = isset($deployment['timeout']) ? (int) $deployment['timeout'] : 120;
+        if ($timeout < 1) {
+            throw new DeploymentException('deployment_timeout_invalid', 500);
+        }
         $lockPath = isset($deployment['lock_path']) ? $deployment['lock_path'] : storage_path('framework/cache/laravel-githook');
         $lock = new DeploymentLock();
 
@@ -71,8 +74,19 @@ class DeploymentService
         }
 
         $timeout = isset($health['timeout']) ? (int) $health['timeout'] : $defaultTimeout;
+        if ($timeout < 1) {
+            throw new DeploymentException('health_check_timeout_invalid', 500);
+        }
+
+        $url = isset($health['url']) ? $health['url'] : '';
+        $scheme = is_string($url) ? parse_url($url, PHP_URL_SCHEME) : null;
+        $host = is_string($url) ? parse_url($url, PHP_URL_HOST) : null;
+        if (!in_array(strtolower((string) $scheme), ['http', 'https'], true) || !$host) {
+            throw new DeploymentException('health_check_configuration_invalid', 500);
+        }
+
         try {
-            $response = \Illuminate\Support\Facades\Http::timeout($timeout)->get($health['url']);
+            $response = \Illuminate\Support\Facades\Http::timeout($timeout)->get($url);
         } catch (\Throwable $exception) {
             throw new DeploymentException('health_check_failed', 502);
         }

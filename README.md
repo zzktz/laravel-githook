@@ -49,6 +49,8 @@ GITHOOK_LOG_CHANNEL=stack
 
 部署前会检查服务开关、JSON、事件类型、来源 IP（若启用）、仓库身份、共享密钥、分支白名单、工作目录、Git worktree、remote 和工作树状态。相同目录的并发请求通过文件锁串行保护；Git 操作默认超时 120 秒。
 
+首版在 webhook HTTP 请求中同步部署。若更新步骤可能超过 Gitee 的请求等待时限，应缩短命令耗时或在后续集成队列异步处理；超时的 webhook 重试可能再次触发部署，因此部署命令应保持幂等。
+
 可在 `deployment.commands` 配置部署更新后的命令。命令必须写成参数数组，不能来自 webhook payload，例如：
 
 ```php

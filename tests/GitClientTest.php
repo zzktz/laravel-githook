@@ -88,6 +88,19 @@ class GitClientTest extends TestCase
         }
     }
 
+    public function testItRejectsAPathInsideTheRepositoryInsteadOfItsRoot()
+    {
+        $nestedPath = $this->checkout . '/nested';
+        mkdir($nestedPath);
+
+        try {
+            $this->client->deploy($nestedPath, $this->remote, 'main', true, 10);
+            $this->fail('Expected a non-root working directory to be rejected.');
+        } catch (RuntimeException $exception) {
+            $this->assertSame('deployment_path_not_repository_root', $exception->getMessage());
+        }
+    }
+
     private function runGit(array $command, $workingDirectory = null)
     {
         $process = new Process($command, $workingDirectory, [
