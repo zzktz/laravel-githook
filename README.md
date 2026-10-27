@@ -4,12 +4,14 @@
 
 ## 安装
 
-Packagist 发布后可用 Composer 安装：
+当前 Packagist 收录版本为 `dev-main`，使用以下命令安装：
 
 ```bash
-composer require zzktz/laravel-githook
+composer require zzktz/laravel-githook:dev-main
 php artisan vendor:publish --tag=githook-config
 ```
+
+发布稳定版本后，可将 `dev-main` 替换为对应的稳定版本号。
 
 Service Provider 支持 Laravel Composer 自动发现。若项目关闭了自动发现，请在 `config/app.php` 的 `providers` 中注册 `Zzktz\LaravelGithook\GithookServiceProvider::class`。
 
