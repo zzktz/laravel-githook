@@ -1,6 +1,6 @@
-# Laravel Gitee Webhook 自动更新扩展包
+# Laravel Gitee / GitHub Webhook 自动更新扩展包
 
-通过 Gitee Webhook 安全触发 Laravel 项目的 Git 更新，支持 Laravel 8 及以上版本。
+通过 Gitee 或 GitHub Webhook 安全触发 Laravel 项目的 Git 更新，支持 Laravel 8 及以上版本。
 
 ## 安装
 
@@ -22,36 +22,47 @@ Service Provider 支持 Laravel Composer 自动发现。若项目关闭了自动
 ```dotenv
 GITHOOK_ENABLED=true
 GITHOOK_SECRET=请替换为随机长密钥
+GITHOOK_GITHUB_ENABLED=true
+GITHOOK_GITHUB_SECRET=请替换为另一随机长密钥
 GITHOOK_ROUTE_PREFIX=githook
 GITHOOK_ROUTE_URI=webhook
+GITHOOK_GITHUB_ROUTE_URI=github
 GITHOOK_LOG_CHANNEL=stack
 ```
 
-在 `config/githook.php` 配置仓库。`path` 必须是服务器上已存在的 Git checkout 绝对路径；包只接受配置的 Gitee 仓库和分支。示例：
+`GITHOOK_ENABLED` 是总开关，GitHub 入口还需要启用 `GITHOOK_GITHUB_ENABLED`。Gitee 使用 `GITHOOK_SECRET`（兼容旧配置）或 `GITHOOK_GITEE_SECRET`；GitHub 使用单独的 `GITHOOK_GITHUB_SECRET`。
+
+在 `config/githook.php` 配置仓库。`path` 必须是服务器上已存在的 Git checkout 绝对路径；包只接受配置的仓库和分支。示例：
 
 ```php
 'repositories' => [
     'production' => [
         'gitee_repository' => 'your-team/your-project',
-        'remote' => 'git@gitee.com:your-team/your-project.git',
+        'github_repository' => 'your-org/your-project',
+        'remote' => 'git@github.com:your-org/your-project.git',
         'path' => base_path(),
         'branches' => ['main'],
-        # 'secret' => env('GITHOOK_PRODUCTION_SECRET'), # 可为仓库单独设置密钥
+        'secrets' => [
+            'gitee' => env('GITHOOK_PRODUCTION_GITEE_SECRET'),
+            'github' => env('GITHOOK_PRODUCTION_GITHUB_SECRET'),
+        ],
     ],
 ],
 ```
 
-如果省略 `gitee_repository`，配置键（此例为 `production`）将作为仓库全名匹配值。仓库密钥优先于全局 `GITHOOK_SECRET`。Gitee Webhook 使用 `X-Gitee-Token` 请求头发送密钥，事件头需为允许的 push 事件。
+仓库名按 provider 分别匹配：Gitee 使用 `gitee_repository`，GitHub 使用 `github_repository`；省略时使用通用 `repository` 字段或配置键。仓库级 `secrets.gitee` / `secrets.github` 优先于各自的全局密钥。旧版的仓库 `secret` 仍作为 Gitee 专属密钥。
+
+Gitee Webhook 使用 `X-Gitee-Token` 和 `X-Gitee-Event` 校验。GitHub Webhook 使用 `X-GitHub-Event: push`，并以配置的 Secret 校验原始请求体的 `X-Hub-Signature-256` HMAC-SHA256 签名。
 
 默认要求工作树干净，只执行 `fetch` 和快进更新；本地有未提交文件或分支发生分叉时会拒绝部署，不会执行强制重置。请确保 PHP-FPM/应用用户有目录写权限，并能通过 Git remote 配置的 SSH key 或 HTTPS 凭据访问仓库。Web 服务器应使用 HTTPS。
 
-默认 API 地址为 `POST /githook/webhook`。Gitee Webhook 配置此地址并选择 Push Hook。可通过 `GITHOOK_ROUTE_PREFIX`、`GITHOOK_ROUTE_URI` 和 `githook.route.middleware` 修改路径及中间件。默认限制 JSON 请求体为 1 MiB；来源 IP 白名单可在 `allowed_ips` 配置。
+默认 Gitee API 地址为 `POST /githook/webhook`，GitHub 地址为 `POST /githook/github`。分别在 Gitee 选择 Push Hook，在 GitHub Webhooks 中选择 `Just the push event`，Content type 选择 `application/json`，并填写 GitHub Secret。可通过 `GITHOOK_ROUTE_PREFIX`、`GITHOOK_ROUTE_URI`、`GITHOOK_GITHUB_ROUTE_URI` 和 `githook.route.middleware` 修改路径及中间件。默认限制 JSON 请求体为 1 MiB；来源 IP 白名单分别配置在 `providers.gitee.allowed_ips` 和 `providers.github.allowed_ips`。
 
 ## 部署行为
 
 部署前会检查服务开关、JSON、事件类型、来源 IP（若启用）、仓库身份、共享密钥、分支白名单、工作目录、Git worktree、remote 和工作树状态。相同目录的并发请求通过文件锁串行保护；Git 操作默认超时 120 秒。
 
-首版在 webhook HTTP 请求中同步部署。若更新步骤可能超过 Gitee 的请求等待时限，应缩短命令耗时或在后续集成队列异步处理；超时的 webhook 重试可能再次触发部署，因此部署命令应保持幂等。
+首版在 webhook HTTP 请求中同步部署。若更新步骤可能超过 webhook 提供方的请求等待时限，应缩短命令耗时或在后续集成队列异步处理；超时后的 webhook 重试可能再次触发部署，因此部署命令应保持幂等。
 
 可在 `deployment.commands` 配置部署更新后的命令。命令必须写成参数数组，不能来自 webhook payload，例如：
 

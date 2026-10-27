@@ -7,15 +7,34 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Zzktz\LaravelGithook\Exceptions\DeploymentException;
 use Zzktz\LaravelGithook\Services\DeploymentService;
+use Zzktz\LaravelGithook\Services\WebhookAuthenticator;
 
 class WebhookController
 {
-    public function handle(Request $request, DeploymentService $deploymentService)
+    public function handleGitee(Request $request, DeploymentService $deploymentService, WebhookAuthenticator $authenticator)
+    {
+        return $this->handleProvider('gitee', $request, $deploymentService, $authenticator);
+    }
+
+    public function handleGithub(Request $request, DeploymentService $deploymentService, WebhookAuthenticator $authenticator)
+    {
+        return $this->handleProvider('github', $request, $deploymentService, $authenticator);
+    }
+
+    private function handleProvider($provider, Request $request, DeploymentService $deploymentService, WebhookAuthenticator $authenticator)
     {
         $requestId = (string) Str::uuid();
 
         if (!config('githook.enabled', false)) {
             return $this->error('disabled', 404, $requestId);
+        }
+
+        $providerConfig = (array) config('githook.providers.' . $provider, []);
+        $providerEnabled = array_key_exists('enabled', $providerConfig)
+            ? (bool) $providerConfig['enabled']
+            : $provider === 'gitee';
+        if (!$providerEnabled) {
+            return $this->error('provider_disabled', 404, $requestId);
         }
 
         if (!$request->isJson()) {
@@ -33,14 +52,20 @@ class WebhookController
             return $this->error('invalid_json', 400, $requestId);
         }
 
-        $event = strtolower(trim((string) $request->header('X-Gitee-Event', '')));
-        $allowedEvents = array_map('strtolower', (array) config('githook.allowed_events', ['push hook']));
+        $eventHeader = $provider === 'github' ? 'X-GitHub-Event' : 'X-Gitee-Event';
+        $event = strtolower(trim((string) $request->header($eventHeader, '')));
+        $fallbackEvents = $provider === 'github' ? ['push'] : (array) config('githook.allowed_events', ['push hook']);
+        $configuredEvents = (array) (isset($providerConfig['allowed_events'])
+            ? $providerConfig['allowed_events']
+            : $fallbackEvents);
+        $allowedEvents = array_map('strtolower', array_filter($configuredEvents, 'is_string'));
         if ($event === '' || !in_array($event, $allowedEvents, true)) {
             return $this->error('event_not_allowed', 403, $requestId);
         }
 
         $clientIp = $request->ip();
-        $allowedIps = (array) config('githook.allowed_ips', []);
+        $fallbackIps = $provider === 'gitee' ? (array) config('githook.allowed_ips', []) : [];
+        $allowedIps = (array) (isset($providerConfig['allowed_ips']) ? $providerConfig['allowed_ips'] : $fallbackIps);
         if (!empty($allowedIps) && !in_array($clientIp, $allowedIps, true)) {
             return $this->error('source_not_allowed', 403, $requestId);
         }
@@ -56,7 +81,23 @@ class WebhookController
         $repository = null;
         $alias = null;
         foreach ((array) config('githook.repositories', []) as $key => $candidate) {
-            $expectedName = isset($candidate['gitee_repository']) ? $candidate['gitee_repository'] : $key;
+            if (!is_array($candidate)) {
+                continue;
+            }
+
+            $repositoryKey = $provider . '_repository';
+            if ($provider === 'github') {
+                $expectedName = isset($candidate['github_repository'])
+                    ? $candidate['github_repository']
+                    : (isset($candidate['repository'])
+                        ? $candidate['repository']
+                        : (isset($candidate['gitee_repository']) ? $candidate['gitee_repository'] : $key));
+            } else {
+                $expectedName = isset($candidate[$repositoryKey])
+                    ? $candidate[$repositoryKey]
+                    : (isset($candidate['repository']) ? $candidate['repository'] : $key);
+            }
+
             if ($expectedName === $repositoryName) {
                 $repository = $candidate;
                 $alias = $key;
@@ -69,9 +110,21 @@ class WebhookController
             return $this->error('unauthorized', 401, $requestId);
         }
 
-        $secret = isset($repository['secret']) ? $repository['secret'] : config('githook.secret');
-        $token = (string) $request->header('X-Gitee-Token', '');
-        if (!is_string($secret) || $secret === '' || $token === '' || !hash_equals((string) $secret, $token)) {
+        $secret = $this->secretFor($provider, $repository, $providerConfig);
+        if ($provider === 'github') {
+            $verified = $authenticator->verifyGithubSignature(
+                (string) $request->header('X-Hub-Signature-256', ''),
+                $body,
+                $secret
+            );
+        } else {
+            $verified = $authenticator->verifyGiteeToken(
+                (string) $request->header('X-Gitee-Token', ''),
+                $secret
+            );
+        }
+
+        if (!$verified) {
             return $this->error('unauthorized', 401, $requestId);
         }
 
@@ -84,22 +137,50 @@ class WebhookController
         try {
             $result = $deploymentService->deploy($repository, $branch, $alias);
         } catch (DeploymentException $exception) {
-            $this->logResult('warning', $exception->errorCode(), $requestId, $alias, $branch);
+            $this->logResult('warning', $provider, $exception->errorCode(), $requestId, $alias, $branch);
             return $this->error($exception->errorCode(), $exception->httpStatus(), $requestId);
         } catch (\Throwable $exception) {
-            $this->logResult('error', 'deployment_failed', $requestId, $alias, $branch);
+            $this->logResult('error', $provider, 'deployment_failed', $requestId, $alias, $branch);
             return $this->error('deployment_failed', 500, $requestId);
         }
 
-        $this->logResult('info', 'deployment_succeeded', $requestId, $alias, $branch, $result['new_commit']);
+        $this->logResult('info', $provider, 'deployment_succeeded', $requestId, $alias, $branch, $result['new_commit']);
 
         return response()->json([
             'status' => 'success',
+            'provider' => $provider,
             'request_id' => $requestId,
             'repository' => $alias,
             'branch' => $branch,
             'commit' => $result['new_commit'],
         ]);
+    }
+
+    private function secretFor($provider, array $repository, array $providerConfig)
+    {
+        $secrets = isset($repository['secrets']) && is_array($repository['secrets'])
+            ? $repository['secrets']
+            : [];
+        if (isset($secrets[$provider])) {
+            return $secrets[$provider];
+        }
+
+        if ($provider === 'github') {
+            if (isset($repository['github_secret'])) {
+                return $repository['github_secret'];
+            }
+
+            return isset($providerConfig['secret']) ? $providerConfig['secret'] : null;
+        }
+
+        if (isset($repository['gitee_secret'])) {
+            return $repository['gitee_secret'];
+        }
+        if (isset($repository['secret'])) {
+            return $repository['secret'];
+        }
+
+        return isset($providerConfig['secret']) ? $providerConfig['secret'] : config('githook.secret');
     }
 
     private function branchFromPayload($ref)
@@ -128,10 +209,11 @@ class WebhookController
         ], $status);
     }
 
-    private function logResult($level, $code, $requestId, $repository, $branch, $commit = null)
+    private function logResult($level, $provider, $code, $requestId, $repository, $branch, $commit = null)
     {
         $context = [
             'request_id' => $requestId,
+            'provider' => $provider,
             'repository' => $repository,
             'branch' => $branch,
             'code' => $code,
@@ -142,6 +224,6 @@ class WebhookController
         }
 
         $channel = config('githook.logging.channel', 'stack');
-        Log::channel($channel)->{$level}('Gitee webhook deployment', $context);
+        Log::channel($channel)->{$level}('Webhook deployment', $context);
     }
 }

@@ -1,6 +1,6 @@
 {
     "name": "zzktz/laravel-githook",
-    "description": "Laravel 项目的 Gitee Webhook 安全更新扩展包",
+    "description": "支持 Gitee 和 GitHub Webhook 的 Laravel 安全更新扩展包",
     "type": "library",
     "license": "MIT",
     "require": {
